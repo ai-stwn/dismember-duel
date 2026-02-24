@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dismember Duel</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', sans-serif;
+            color: white;
+        }
+        #game-container {
+            text-align: center;
+        }
+        canvas {
+            background: linear-gradient(180deg, #16213e 0%, #1a1a2e 100%);
+            border: 2px solid #e94560;
+            border-radius: 8px;
+        }
+        h1 {
+            color: #e94560;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px #e94560;
+        }
+        .controls {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #888;
+        }
+        .controls span { color: #e94560; }
+        .health-bars {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 0 10px;
+        }
+        .health-bar {
+            width: 45%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .health-fill {
+            height: 100%;
+            transition: width 0.3s;
+        }
+        .p1 .health-fill { background: linear-gradient(90deg, #e94560, #ff6b6b); }
+        .p2 .health-fill { background: linear-gradient(90deg, #4ecdc4, #45b7aa); }
+        .label { font-size: 12px; margin-bottom: 3px; }
+        #winner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            color: #e94560;
+            text-shadow: 0 0 20px #e94560;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>⚔️ DISMEMBER DUEL ⚔️</h1>
+        <div class="health-bars">
+            <div class="p1">
+                <div class="label">Player 1</div>
+                <div class="health-bar"><div class="health-fill" id="p1-health" style="width: 100%"></div></div>
+            </div>
+            <div class="p2">
+                <div class="label">Player 2</div>
+                <div class="health-bar"><div class="health-fill" id="p2-health" style="width: 100%"></div></div>
+            </div>
+        </div>
+        <canvas id="game" width="900" height="500"></canvas>
+        <div class="controls">
+            <span>P1:</span> WASD move, F attack, G kick &nbsp;|&nbsp;
+            <span>P2:</span> Arrows move, / attack, . kick &nbsp;|&nbsp;
+            <span>R</span> restart
+        </div>
+        <div id="winner"></div>
+    </div>
+
+    <script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Physics constants
+const GRAVITY = 0.5;
+const GROUND = canvas.height - 50;
+const FRICTION = 0.8;
+const BOUNCE = 0.6;
+
+// Body part class with physics
+class BodyPart {
+    constructor(x, y, width, height, color, name, mass = 1) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.color = color;
+        this.name = name;
+        this.mass = mass;
+        this.vx = 0;
+        this.vy = 0;
+        this.rotation = 0;
+        this.rotationSpeed = 0;
+        this.attached = true;
+        this.health = 100;
+    }
+
+    update() {
+        if (!this.attached) {
+            this.vy += GRAVITY;
+            this.x += this.vx;
+            this.y += this.vy;
+            this.rotation += this.rotationSpeed;
+            
+            // Ground collision
+            if (this.y + this.height > GROUND) {
+                this.y = GROUND - this.height;
+                this.vy *= -BOUNCE;
+                this.vx *= FRICTION;
+                this.rotationSpeed *= 0.8;
+                if (Math.abs(this.vy) < 1) this.vy = 0;
+            }
+            
+            // Wall collision
+            if (this.x < 0) { this.x = 0; this.vx *= -BOUNCE; }
+            if (this.x + this.width > canvas.width) { 
+                this.x = canvas.width - this.width; 
+                this.vx *= -BOUNCE; 
+            }
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x + this.width/2, this.y + this.height/2);
+        ctx.rotate(this.rotation);
+        ctx.fillStyle = this.color;
+        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+        
+        // Draw face on head
+        if (this.name === 'head') {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-8, -5, 4, 4); // left eye
+            ctx.fillRect(4, -5, 4, 4);  // right eye
+            ctx.fillRect(-4, 5, 8, 3);  // mouth
+        }
+        ctx.restore();
+    }
+
+    detach(force = 5) {
+        if (this.attached) {
+            this.attached = false;
+            this.vx = (Math.random() - 0.5) * force * 2;
+            this.vy = -Math.random() * force * 2;
+            this.rotationSpeed = (Math.random() - 0.5) * 0.3;
+        }
+    }
+}
+
+// Fighter class
+class Fighter {
+    constructor(x, color1, color2, facing) {
+        this.baseX = x;
+        this.baseY = GROUND;
+        this.x = x;
+        this.y = GROUND - 120;
+        this.vx = 0;
+        this.vy = 0;
+        this.facing = facing; // 1 = right, -1 = left
+        this.color1 = color1;
+        this.color2 = color2;
+        this.health = 100;
+        this.attacking = false;
+        this.kicking = false;
+        this.attackCooldown = 0;
+        this.stunned = 0;
+        this.grounded = true;
+        
+        // Create body parts
+        this.parts = {
+            head: new BodyPart(0, 0, 30, 30, color1, 'head', 2),
+            torso: new BodyPart(0, 0, 35, 50, color2, 'torso', 5),
+            leftArm: new BodyPart(0, 0, 12, 40, color1, 'leftArm', 1),
+            rightArm: new BodyPart(0, 0, 12, 40, color1, 'rightArm', 1),
+            leftLeg: new BodyPart(0, 0, 14, 45, color2, 'leftLeg', 1.5),
+            rightLeg: new BodyPart(0, 0, 14, 45, color2, 'rightLeg', 1.5),
+        };
+        
+        this.updatePartPositions();
+    }
+
+    updatePartPositions() {
+        const p = this.parts;
+        
+        // Position attached parts relative to torso
+        if (p.torso.attached) {
+            p.torso.x = this.x - p.torso.width/2;
+            p.torso.y = this.y;
+        }
+        
+        if (p.head.attached) {
+            p.head.x = this.x - p.head.width/2;
+            p.head.y = this.y - p.head.height - 5;
+        }
+        
+        const armOffsetY = this.y + 5;
+        const armSwing = this.attacking ? Math.sin(Date.now() / 30) * 20 : 0;
+        
+        if (p.leftArm.attached) {
+            p.leftArm.x = this.x - p.torso.width/2 - p.leftArm.width + 5;
+            p.leftArm.y = armOffsetY + (this.attacking && this.facing === -1 ? armSwing : 0);
+        }
+        
+        if (p.rightArm.attached) {
+            p.rightArm.x = this.x + p.torso.width/2 - 5;
+            p.rightArm.y = armOffsetY + (this.attacking && this.facing === 1 ? armSwing : 0);
+        }
+        
+        const legOffsetY = this.y + p.torso.height;
+        const legSwing = this.kicking ? Math.sin(Date.now() / 20) * 30 : 0;
+        
+        if (p.leftLeg.attached) {
+            p.leftLeg.x = this.x - p.leftLeg.width - 2;
+            p.leftLeg.y = legOffsetY + (this.kicking && this.facing === -1 ? legSwing : 0);
+        }
+        
+        if (p.rightLeg.attached) {
+            p.rightLeg.x = this.x + 2;
+            p.rightLeg.y = legOffsetY + (this.kicking && this.facing === 1 ? legSwing : 0);
+        }
+    }
+
+    update() {
+        if (this.stunned > 0) this.stunned--;
+        if (this.attackCooldown > 0) this.attackCooldown--;
+        
+        // Apply gravity and movement
+        if (!this.grounded) {
+            this.vy += GRAVITY;
+        }
+        
+        this.x += this.vx;
+        this.y += this.vy;
+        this.vx *= 0.9;
+        
+        // Ground check
+        const effectiveGround = GROUND - 120;
+        if (this.y >= effectiveGround) {
+            this.y = effectiveGround;
+            this.vy = 0;
+            this.grounded = true;
+        } else {
+            this.grounded = false;
+        }
+        
+        // Boundaries
+        if (this.x < 50) this.x = 50;
+        if (this.x > canvas.width - 50) this.x = canvas.width - 50;
+        
+        // Update all parts
+        this.updatePartPositions();
+        Object.values(this.parts).forEach(part => part.update());
+        
+        // End attack animations
+        if (this.attacking && Date.now() % 200 < 10) this.attacking = false;
+        if (this.kicking && Date.now() % 200 < 10) this.kicking = false;
+    }
+
+    draw(ctx) {
+        // Draw attached parts in order
+        const order = ['leftLeg', 'rightLeg', 'leftArm', 'torso', 'rightArm', 'head'];
+        order.forEach(name => {
+            this.parts[name].draw(ctx);
+        });
+        
+        // Draw blood splatter where parts are missing
+        Object.values(this.parts).forEach(part => {
+            if (!part.attached) {
+                ctx.fillStyle = '#8B0000';
+                ctx.beginPath();
+                ctx.arc(
+                    part.name === 'head' ? this.x : this.parts.torso.x + this.parts.torso.width/2,
+                    part.name === 'head' ? this.y - 5 : this.parts.torso.y + 20,
+                    8, 0, Math.PI * 2
+                );
+                ctx.fill();
+            }
+        });
+    }
+
+    getAttackHitbox() {
+        const range = 60;
+        return {
+            x: this.facing === 1 ? this.x + 20 : this.x - range,
+            y: this.y,
+            width: range,
+            height: 50
+        };
+    }
+
+    getKickHitbox() {
+        const range = 70;
+        return {
+            x: this.facing === 1 ? this.x + 10 : this.x - range + 10,
+            y: this.y + 60,
+            width: range,
+            height: 40
+        };
+    }
+
+    takeDamage(amount, attacker, isKick = false) {
+        this.health -= amount;
+        this.stunned = 20;
+        this.vx = attacker.facing * 8;
+        this.vy = -3;
+        
+        // Random chance to lose a body part based on damage
+        if (Math.random() < amount / 50) {
+            const attachedParts = Object.entries(this.parts)
+                .filter(([name, part]) => part.attached && name !== 'torso')
+                .map(([name]) => name);
+            
+            if (attachedParts.length > 0) {
+                const partToLose = attachedParts[Math.floor(Math.random() * attachedParts.length)];
+                this.parts[partToLose].detach(10);
+                this.health -= 10; // Extra damage for losing a limb
+                
+                // Spawn blood particles
+                spawnBlood(this.parts[partToLose].x, this.parts[partToLose].y, 10);
+            }
+        }
+        
+        spawnBlood(this.x, this.y + 30, 5);
+    }
+
+    canMove() {
+        return this.parts.leftLeg.attached || this.parts.rightLeg.attached;
+    }
+
+    canPunch() {
+        return this.parts.leftArm.attached || this.parts.rightArm.attached;
+    }
+
+    canKick() {
+        return this.parts.leftLeg.attached || this.parts.rightLeg.attached;
+    }
+}
+
+// Blood particles
+let bloodParticles = [];
+
+function spawnBlood(x, y, count) {
+    for (let i = 0; i < count; i++) {
+        bloodParticles.push({
+            x, y,
+            vx: (Math.random() - 0.5) * 10,
+            vy: -Math.random() * 8,
+            life: 60 + Math.random() * 60,
+            size: 2 + Math.random() * 4
+        });
+    }
+}
+
+function updateBlood() {
+    bloodParticles = bloodParticles.filter(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.3;
+        p.life--;
+        
+        if (p.y > GROUND) {
+            p.y = GROUND;
+            p.vy = 0;
+            p.vx *= 0.8;
+        }
+        
+        return p.life > 0;
+    });
+}
+
+function drawBlood() {
+    bloodParticles.forEach(p => {
+        ctx.fillStyle = `rgba(139, 0, 0, ${p.life / 60})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+    });
+}
+
+// Game state
+let player1, player2;
+let gameOver = false;
+let keys = {};
+
+function init() {
+    player1 = new Fighter(200, '#e94560', '#c73e54', 1);
+    player2 = new Fighter(700, '#4ecdc4', '#45b7aa', -1);
+    bloodParticles = [];
+    gameOver = false;
+    document.getElementById('winner').style.display = 'none';
+}
+
+function checkHit(attacker, defender, hitbox) {
+    const defenderBox = {
+        x: defender.x - 20,
+        y: defender.y - 30,
+        width: 40,
+        height: 120
+    };
+    
+    return hitbox.x < defenderBox.x + defenderBox.width &&
+           hitbox.x + hitbox.width > defenderBox.x &&
+           hitbox.y < defenderBox.y + defenderBox.height &&
+           hitbox.y + hitbox.height > defenderBox.y;
+}
+
+function update() {
+    if (gameOver) return;
+    
+    // Player 1 controls (WASD + F/G)
+    if (player1.stunned === 0) {
+        const p1Speed = player1.canMove() ? 5 : 1;
+        if (keys['KeyA']) { player1.vx = -p1Speed; player1.facing = -1; }
+        if (keys['KeyD']) { player1.vx = p1Speed; player1.facing = 1; }
+        if (keys['KeyW'] && player1.grounded) { player1.vy = -12; player1.grounded = false; }
+        
+        if (keys['KeyF'] && player1.attackCooldown === 0 && player1.canPunch()) {
+            player1.attacking = true;
+            player1.attackCooldown = 30;
+            if (checkHit(player1, player2, player1.getAttackHitbox())) {
+                player2.takeDamage(15, player1);
+            }
+        }
+        if (keys['KeyG'] && player1.attackCooldown === 0 && player1.canKick()) {
+            player1.kicking = true;
+            player1.attackCooldown = 40;
+            if (checkHit(player1, player2, player1.getKickHitbox())) {
+                player2.takeDamage(20, player1, true);
+            }
+        }
+    }
+    
+    // Player 2 controls (Arrows + / and .)
+    if (player2.stunned === 0) {
+        const p2Speed = player2.canMove() ? 5 : 1;
+        if (keys['ArrowLeft']) { player2.vx = -p2Speed; player2.facing = -1; }
+        if (keys['ArrowRight']) { player2.vx = p2Speed; player2.facing = 1; }
+        if (keys['ArrowUp'] && player2.grounded) { player2.vy = -12; player2.grounded = false; }
+        
+        if (keys['Slash'] && player2.attackCooldown === 0 && player2.canPunch()) {
+            player2.attacking = true;
+            player2.attackCooldown = 30;
+            if (checkHit(player2, player1, player2.getAttackHitbox())) {
+                player1.takeDamage(15, player2);
+            }
+        }
+        if (keys['Period'] && player2.attackCooldown === 0 && player2.canKick()) {
+            player2.kicking = true;
+            player2.attackCooldown = 40;
+            if (checkHit(player2, player1, player2.getKickHitbox())) {
+                player1.takeDamage(20, player2, true);
+            }
+        }
+    }
+    
+    player1.update();
+    player2.update();
+    updateBlood();
+    
+    // Update health bars
+    document.getElementById('p1-health').style.width = Math.max(0, player1.health) + '%';
+    document.getElementById('p2-health').style.width = Math.max(0, player2.health) + '%';
+    
+    // Check win condition
+    if (player1.health <= 0 || player2.health <= 0) {
+        gameOver = true;
+        const winner = player1.health > player2.health ? 'PLAYER 1 WINS!' : 'PLAYER 2 WINS!';
+        document.getElementById('winner').textContent = winner;
+        document.getElementById('winner').style.display = 'block';
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw ground
+    ctx.fillStyle = '#2d2d44';
+    ctx.fillRect(0, GROUND, canvas.width, canvas.height - GROUND);
+    
+    // Draw blood stains on ground
+    drawBlood();
+    
+    // Draw fighters
+    player1.draw(ctx);
+    player2.draw(ctx);
+    
+    // Draw detached parts on top
+    [...Object.values(player1.parts), ...Object.values(player2.parts)]
+        .filter(p => !p.attached)
+        .forEach(p => p.draw(ctx));
+}
+
+function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+// Input handling
+document.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'KeyR') init();
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+// Start game
+init();
+gameLoop();
+    </script>
+</body>
+</html>
